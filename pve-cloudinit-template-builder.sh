@@ -462,22 +462,22 @@ for item in "${choices[@]}"; do
         "qemu-guest-agent,cloud-guest-utils"
       ;;
     "openSUSE Leap 15.6")
-      log "[*] Building openSUSE Leap 15.6 image..."
+      echo "[*] Building openSUSE Leap 15.6 image..."
       create_template_vm \
         "${OPENSUSE_LEAP_156_VMID}" \
         "cloudinit-template-opensuse-leap-15.6" \
         "openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2" \
-        "https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2" \
-        "qemu-guest-agent,cloud-init"
+        "https://download.opensuse.org/opensuse/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2" \
+        ""
       ;;
     "openSUSE Tumbleweed")
-      log "[*] Building openSUSE Tumbleweed image..."
+      echo "[*] Building openSUSE Tumbleweed image..."
       create_template_vm \
         "${OPENSUSE_TUMBLEWEED_VMID}" \
         "cloudinit-template-opensuse-tumbleweed" \
         "openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2" \
         "https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2" \
-        "qemu-guest-agent,cloud-init"
+        ""
       ;;
     *)
       log "WARN: Unknown selection '${item}' – skipping."

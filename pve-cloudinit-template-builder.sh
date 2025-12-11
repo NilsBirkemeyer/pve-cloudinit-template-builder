@@ -22,8 +22,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 # Load .env if present
 if [[ -f "${SCRIPT_DIR}/.env" ]]; then
-  # shellcheck source=/dev/null
   set -a
+  # shellcheck source=/dev/null
   . "${SCRIPT_DIR}/.env"
   set +a
 fi

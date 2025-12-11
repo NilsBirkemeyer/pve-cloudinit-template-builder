@@ -5,6 +5,12 @@ set -euo pipefail
 # Proxmox VE Cloud-Init Template Generator
 # =============================================================================
 
+# Prevent sourcing to avoid redirecting your interactive shell into the log file.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  echo "ERROR: Do not source this script. Run it via 'bash ${BASH_SOURCE[0]##*/}' instead." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 # =============================================================================
 # Load configuration from .env
 # =============================================================================
@@ -145,6 +151,7 @@ run_step() {
   else
     log_info "${description}"
     if (($# > 0)); then
+      log_debug "       running: $*"
       "$@"
     fi
   fi
@@ -181,11 +188,11 @@ print_usage() {
   log_summary "  -v"
   log_summary "      Lightly verbose console output (level 2)."
   log_summary "  -vv"
-  log_summary "      Medium verbosity console output (level 3)."
+  log_summary "      Full verbosity console output (level 3)."
   log_summary "  -vvv"
-  log_summary "      Maximum verbosity console output (level 3 – all available)."
+  log_summary "      Alias for -vv (maximum available detail)."
   log_summary "  --debug"
-  log_summary "      Print all debug output to the console (level 3)."
+  log_summary "      Print all debug output to the console (same as -vvv, level 3)."
   log_summary "  --dry-run"
   log_summary "      Show what would happen without making changes to Proxmox."
   log_summary "  --validate"
@@ -264,7 +271,7 @@ fi
 
 log_summary "Checking prerequisites..."
 # base tools
-BASE_BINS=(qm wget virt-sysprep virt-customize stat pvesm)
+BASE_BINS=(qm wget virt-sysprep virt-customize stat pvesm python3)
 for bin in "${BASE_BINS[@]}"; do
   require_bin "$bin"
 done

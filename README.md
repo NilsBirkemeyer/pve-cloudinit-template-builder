@@ -81,6 +81,7 @@ The script expects at least:
 * `virt-sysprep` (usually from `libguestfs-tools` or equivalent)
 * `virt-customize`
 * `stat`
+* `python3`
 * `fzf` (only needed for interactive mode)
 * `bash`
 
@@ -220,6 +221,9 @@ IMAGES_CONFIG_FILE="/path/to/images.json"
 ## Usage
 
 From the repository directory:
+
+> **Important:** Run the script with `bash ./pve-cloudinit-template-builder.sh`. Do not `source` it, or your shell output will be
+> redirected into the log file.
 
 ### Interactive mode (default, using fzf)
 

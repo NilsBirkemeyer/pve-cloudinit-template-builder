@@ -1,0 +1,15 @@
+# Directories created by the script (if DOWNLOAD_DIR is inside the repo)
+logs/
+state/
+
+# Log files
+*.log
+
+# Editor / OS files
+*~
+*.swp
+*.swo
+*.tmp
+.DS_Store
+.idea/
+.vscode/

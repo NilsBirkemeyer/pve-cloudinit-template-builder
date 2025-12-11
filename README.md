@@ -1,14 +1,15 @@
 # Proxmox VE Cloud-Init Template Builder
 
-This repository contains a Bash script that automates the creation of Proxmox VE VM templates based on upstream cloud-init images (Debian, Ubuntu, openSUSE).
+This repository contains a Bash script that automates the creation of Proxmox VE VM templates based on upstream cloud-init images (Debian, Ubuntu, openSUSE, Fedora, Rocky Linux, AlmaLinux).
 The script downloads and caches cloud images, customizes them, and converts the resulting VMs into reusable Proxmox templates.
 
 The script is designed to be:
 
 * Repeatable (idempotent-ish with `SKIP_IF_BASE_UNCHANGED`)
 * Non-interactive friendly (for automation) but with an interactive `fzf` mode
-* Quiet on the terminal while writing full details to a log file
+* Quiet on the terminal while writing full details to a log file (optional verbose levels)
 * Configurable via a `.env` file instead of editing the script itself
+* Configurable list of images via `images.json`
 
 ---
 
@@ -22,6 +23,9 @@ The script is designed to be:
   * Ubuntu 24.04 LTS (noble)
   * openSUSE Leap 15.6
   * openSUSE Tumbleweed
+  * Fedora 40
+  * Rocky Linux 9
+  * AlmaLinux 9
 * Caches base images in a configurable directory and only re-downloads if needed
 * Runs `virt-sysprep` and `virt-customize` to:
 
@@ -37,6 +41,7 @@ The script is designed to be:
 * Converts VMs into templates after resizing disks to a configurable size
 * Optional sleeps around disk resize as a workaround for Proxmox disk import/resize timing issues
 * Idempotence helper: skip rebuilding templates if the base image has not changed
+* Safety helpers: dry-run and validation modes to preview actions and config correctness
 
 ---
 
@@ -100,6 +105,34 @@ On your Proxmox node:
 
 ---
 
+## Image catalogue (`images.json`)
+
+The available images are defined in `images.json` next to the script. Each entry looks like:
+
+```json
+[
+  {
+    "label": "Debian 12",
+    "vm_id": 9000,
+    "vm_name": "cloudinit-template-debian-12",
+    "image_file": "debian-12-generic-amd64.qcow2",
+    "image_url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
+    "packages": "qemu-guest-agent,cloud-guest-utils"
+  }
+]
+```
+
+* `label` – human-readable name shown in the menu/output.
+* `vm_id` – Proxmox VMID to use for the template.
+* `vm_name` – VM name given to the template.
+* `image_file` – filename of the downloaded base image.
+* `image_url` – source URL for the image.
+* `packages` – optional comma-separated package list for `virt-customize`.
+
+You can add or remove entries to support more images without changing the script. To point the script to a different file, set `IMAGES_CONFIG_FILE=/path/to/your.json` in the environment.
+
+---
+
 ## Configuration via `.env`
 
 All configuration is expected to be provided via a `.env` file located next to the script.
@@ -132,6 +165,9 @@ SYSPREP_OPS="bash-history,logfiles,ssh-hostkeys,machine-id,package-manager-cache
 
 SKIP_IF_BASE_UNCHANGED="false"
 RESIZE_WAIT_ENABLED="true"
+
+# Optional override for a custom image list
+IMAGES_CONFIG_FILE="/path/to/images.json"
 
 ### Important variables
 
@@ -185,6 +221,9 @@ RESIZE_WAIT_ENABLED="true"
 
 From the repository directory:
 
+> **Important:** Run the script with `bash ./pve-cloudinit-template-builder.sh`. Do not `source` it, or your shell output will be
+> redirected into the log file.
+
 ### Interactive mode (default, using fzf)
 
 ./pve-cloudinit-template-builder.sh
@@ -211,6 +250,30 @@ Alternatively, set in `.env`:
 
 RESIZE_WAIT_ENABLED="false"
 
+### Dry-run and validation
+
+Preview actions or validate configuration without touching Proxmox:
+
+* `--dry-run` shows the planned steps and commands without creating, destroying, or modifying any VMs.
+* `--validate` checks required binaries, configuration, and the image catalogue (including duplicate labels/VMIDs) and then exits.
+
+### Verbosity levels
+
+The script always writes full details to the log file. Console output can be tuned with:
+
+* Default (no flags) – summary lines per image/template.
+* `-v` or `--verbose` – lightly verbose (level 2) progress on the console.
+* `-vv` – medium verbosity (level 3) progress on the console.
+* `-vvv` or `--debug` – maximum verbosity (all available debug-level messages).
+
+---
+
+### Future improvements
+
+Ideas for extending the tool (validation, structured logging, caching, notifications, and more) are collected in [IMPROVEMENTS.md](IMPROVEMENTS.md).
+
+---
+
 ### Help
 
 ./pve-cloudinit-template-builder.sh --help
@@ -221,7 +284,7 @@ RESIZE_WAIT_ENABLED="false"
 
 The script writes:
 
-* Human-readable progress messages to the terminal (high-level status).
+* Human-readable progress messages to the terminal (level depends on `--verbose` / `--debug`).
 * Full command output and details (including `wget`, `virt-sysprep`, `virt-customize`, `qm`, `pvesm` messages) into a log file.
 
 Logs are stored in:
@@ -238,10 +301,7 @@ State files for `SKIP_IF_BASE_UNCHANGED` are stored in:
 
 ## VM IDs
 
-The script uses fixed VMIDs for each template (one VMID per distribution).
-You should ensure these VMIDs are free on your Proxmox node before running the script for the first time.
-
-If you want to change VMIDs, adjust them in the script (or extend the script to read them from `.env` as well).
+VMIDs are defined per image in `images.json`. Ensure the IDs you configure are free on your Proxmox node before running the script.
 
 ---
 

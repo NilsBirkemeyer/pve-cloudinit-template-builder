@@ -5,11 +5,13 @@ on:
     branches: [ "main" ]
     paths:
       - 'pve-cloudinit-template-builder.sh'
+      - '.env.example'
       - '.github/workflows/shellcheck.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'pve-cloudinit-template-builder.sh'
+      - '.env.example'
       - '.github/workflows/shellcheck.yml'
   workflow_dispatch:
 

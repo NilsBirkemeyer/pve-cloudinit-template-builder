@@ -8,7 +8,7 @@ set -euo pipefail
 # Prevent sourcing to avoid redirecting your interactive shell into the log file.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   echo "ERROR: Do not source this script. Run it via 'bash ${BASH_SOURCE[0]##*/}' instead." >&2
-  return 1 2>/dev/null || exit 1
+  return 1
 fi
 
 # =============================================================================
@@ -167,6 +167,107 @@ trap error_handler ERR
 
 log_summary "Log file: ${LOG_FILE}"
 
+compute_template_signature() {
+  local base_mtime="$1"
+  local download_url="$2"
+  local image_file="$3"
+  local pkg_list="$4"
+  local checksum="$5"
+
+  python3 - <<PY
+import hashlib, json, os, pathlib, sys
+
+def sha256_file(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open('rb') as fh:
+        for chunk in iter(lambda: fh.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+authorized_keys = pathlib.Path("${AUTHORIZED_KEYS}")
+payload = {
+    "admin_password_hash": hashlib.sha256(os.environ.get("ADMIN_PASSWORD", "").encode()).hexdigest(),
+    "authorized_keys_hash": sha256_file(authorized_keys),
+    "base_mtime": "${base_mtime}",
+    "checksum": "${checksum}",
+    "disk_size": "${DISK_SIZE}",
+    "download_url": "${download_url}",
+    "image_file": "${image_file}",
+    "ipconfig": "${IPCONFIG}",
+    "nameserver": "${NAMESERVER}",
+    "net_bridge": "${NET_BRIDGE}",
+    "packages": "${pkg_list}",
+    "resize_wait_enabled": "${RESIZE_WAIT_ENABLED}",
+    "searchdomain": "${SEARCHDOMAIN}",
+    "storage_pool": "${STORAGE_POOL}",
+    "sysprep_ops": "${SYSPREP_OPS}",
+    "timezone": "${TIMEZONE}",
+    "vm_cores": "${VM_CORES}",
+    "vm_ram": "${VM_RAM}",
+}
+
+print(hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest())
+PY
+}
+
+verify_checksum() {
+  local file_path="$1"
+  local checksum_spec="$2"
+
+  if [[ -z "${checksum_spec}" ]]; then
+    return 0
+  fi
+
+  local algo expected
+  if [[ "${checksum_spec}" == *:* ]]; then
+    algo="${checksum_spec%%:*}"
+    expected="${checksum_spec#*:}"
+  else
+    algo="sha256"
+    expected="${checksum_spec}"
+  fi
+
+  if ! python3 - "$file_path" "$algo" "$expected" <<'PY'; then exit 1; fi
+import hashlib, pathlib, sys
+
+file_path = pathlib.Path(sys.argv[1])
+algo = sys.argv[2].lower()
+expected = sys.argv[3].lower()
+
+try:
+    hasher = hashlib.new(algo)
+except ValueError:
+    print(f"Unsupported checksum algorithm: {algo}", file=sys.stderr)
+    sys.exit(1)
+
+with file_path.open('rb') as fh:
+    for chunk in iter(lambda: fh.read(8192), b''):
+        hasher.update(chunk)
+
+actual = hasher.hexdigest().lower()
+if actual != expected:
+    print(f"Checksum mismatch for {file_path}: expected {expected}, got {actual}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+read_state_file() {
+  local path="$1"
+  local mtime=""
+  local signature=""
+
+  if [[ -f "${path}" ]]; then
+    while IFS='=' read -r key value; do
+      case "${key}" in
+        base_mtime) mtime="${value}" ;;
+        signature) signature="${value}" ;;
+      esac
+    done < "${path}"
+  fi
+
+  echo "${mtime}|${signature}"
+}
+
 require_bin() {
   command -v "$1" >/dev/null 2>&1 || {
     log_err "ERROR: Required command '$1' not found. Please install it and retry."
@@ -311,6 +412,7 @@ declare -a IMAGE_NAMES=()
 declare -a IMAGE_FILES=()
 declare -a IMAGE_URLS=()
 declare -a IMAGE_PACKAGES=()
+declare -a IMAGE_CHECKSUMS=()
 declare -A IMAGE_INDEX_BY_LABEL=()
 
 load_image_config() {
@@ -346,6 +448,7 @@ for idx, item in enumerate(data):
             print(f"Entry #{idx + 1} missing required key '{key}'", file=sys.stderr)
             sys.exit(1)
     packages = item.get("packages", "")
+    checksum = item.get("checksum", "")
     fields = [
         item["label"],
         str(item["vm_id"]),
@@ -353,6 +456,7 @@ for idx, item in enumerate(data):
         item["image_file"],
         item["image_url"],
         packages,
+        checksum,
     ]
     print("|".join(fields))
 PY
@@ -362,13 +466,14 @@ PY
   fi
 
     local index=0
-  while IFS='|' read -r label vm_id vm_name image_file image_url packages; do
+  while IFS='|' read -r label vm_id vm_name image_file image_url packages checksum; do
     IMAGE_LABELS+=("${label}")
     IMAGE_VM_IDS+=("${vm_id}")
     IMAGE_NAMES+=("${vm_name}")
     IMAGE_FILES+=("${image_file}")
     IMAGE_URLS+=("${image_url}")
     IMAGE_PACKAGES+=("${packages}")
+    IMAGE_CHECKSUMS+=("${checksum}")
     IMAGE_INDEX_BY_LABEL["${label}"]=${index}
     ((index++))
   done <<<"${parsed}"
@@ -442,6 +547,7 @@ create_template_vm() {
   local base_image_name="$3"   # must match the filename at the end of the URL
   local download_url="$4"
   local pkg_list="$5"
+  local checksum="$6"
 
   local base_image_file="${DOWNLOAD_DIR}/${base_image_name}"
   local work_image_file="${DOWNLOAD_DIR}/${vm_name}-work.qcow2"
@@ -473,6 +579,12 @@ create_template_vm() {
     fi
 
     log_info "Base image '${base_image_name}' ready."
+
+    if [[ -n "${checksum}" ]]; then
+      run_step "Verify checksum for ${base_image_name}" verify_checksum "${base_image_file}" "${checksum}"
+    else
+      log_warn "No checksum provided for ${base_image_name}; download integrity is unchecked."
+    fi
   fi
 
   local base_mtime=""
@@ -480,16 +592,19 @@ create_template_vm() {
     base_mtime="$(stat -c %Y "${base_image_file}")"
   fi
 
+  local current_signature=""
+  current_signature="$(compute_template_signature "${base_mtime}" "${download_url}" "${base_image_name}" "${pkg_list}" "${checksum}")"
+
   # Optional: skip rebuild if base image hasn't changed and VM already exists
   if [[ "${SKIP_IF_BASE_UNCHANGED}" == "true" ]]; then
     if qm config "${vm_id}" &>/dev/null; then
-      if [[ -f "${state_file}" ]]; then
-        local last_mtime
-        last_mtime="$(<"${state_file}")"
-        if [[ "${last_mtime}" == "${base_mtime}" ]]; then
-          log_summary "Base image unchanged and VM ${vm_id} already exists; skipping rebuild (SKIP_IF_BASE_UNCHANGED=true)."
-          return 0
-        fi
+      local state_data=""
+      state_data="$(read_state_file "${state_file}")"
+      IFS='|' read -r last_mtime last_signature <<<"${state_data}"
+
+      if [[ "${last_mtime}" == "${base_mtime}" ]] && [[ "${last_signature}" == "${current_signature}" ]]; then
+        log_summary "Base image and configuration unchanged; skipping VM ${vm_id} rebuild (SKIP_IF_BASE_UNCHANGED=true)."
+        return 0
       fi
     fi
   fi
@@ -525,11 +640,27 @@ create_template_vm() {
 
   # Figure out the actual volume ID that qm importdisk created.
   local disk_vol_id
-  disk_vol_id="$(pvesm list "${STORAGE_POOL}" | awk -v pat="^${STORAGE_POOL}:vm-${vm_id}-disk-" '$1 ~ pat {print $1; exit}')"
+  if ! ${DRY_RUN}; then
+    disk_vol_id="$(qm config "${vm_id}" --format json | python3 -c 'import json, sys
 
-  if [[ -z "${disk_vol_id}" && ! ${DRY_RUN} ]]; then
-    log_err "ERROR: Could not find imported disk for VM ${vm_id} on storage ${STORAGE_POOL}"
-    exit 1
+config = json.load(sys.stdin)
+target_storage = sys.argv[1]
+
+unused_disks = []
+for key, value in config.items():
+    if key.startswith("unused") and isinstance(value, str) and value.startswith(target_storage + ":"):
+        unused_disks.append((key, value))
+
+if unused_disks:
+    # Use the highest unused index to favor the most recent import
+    selected = sorted(unused_disks, key=lambda item: item[0])[-1][1]
+    print(selected)
+' "${STORAGE_POOL}")"
+
+    if [[ -z "${disk_vol_id}" ]]; then
+      log_err "ERROR: Could not find imported disk for VM ${vm_id} on storage ${STORAGE_POOL}"
+      exit 1
+    fi
   fi
 
   log_info "Configuring disks, boot, and cloud-init..."
@@ -576,7 +707,10 @@ create_template_vm() {
   log_info "Converting VM ${vm_id} to a template..."
   run_step "Convert to template" qm template "${vm_id}"
   if ! ${DRY_RUN} && [[ -n "${base_mtime}" ]]; then
-    echo "${base_mtime}" > "${state_file}"
+    {
+      echo "base_mtime=${base_mtime}"
+      echo "signature=${current_signature}"
+    } > "${state_file}"
   fi
   log_summary "Template created: ${vm_name}"
 
@@ -644,9 +778,10 @@ build_image_by_index() {
   local image_file="${IMAGE_FILES[${idx}]}"
   local image_url="${IMAGE_URLS[${idx}]}"
   local packages="${IMAGE_PACKAGES[${idx}]}"
+  local checksum="${IMAGE_CHECKSUMS[${idx}]}"
 
   log_summary "Building ${label} (VMID ${vm_id})..."
-  create_template_vm "${vm_id}" "${vm_name}" "${image_file}" "${image_url}" "${packages}"
+  create_template_vm "${vm_id}" "${vm_name}" "${image_file}" "${image_url}" "${packages}" "${checksum}"
 }
 
 for item in "${choices[@]}"; do

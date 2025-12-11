@@ -467,7 +467,7 @@ for item in "${choices[@]}"; do
         "${OPENSUSE_LEAP_156_VMID}" \
         "cloudinit-template-opensuse-leap-15.6" \
         "openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2" \
-        "https://download.opensuse.org/opensuse/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2" \
+        "https://download.opensuse.org/distribution/leap/15.6/appliances/openSUSE-Leap-15.6-Minimal-VM.x86_64-Cloud.qcow2" \
         ""
       ;;
     "openSUSE Tumbleweed")

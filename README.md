@@ -118,7 +118,8 @@ The available images are defined in `images.json` next to the script. Each entry
     "vm_name": "cloudinit-template-debian-12",
     "image_file": "debian-12-generic-amd64.qcow2",
     "image_url": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
-    "packages": "qemu-guest-agent,cloud-guest-utils"
+    "packages": "qemu-guest-agent,cloud-guest-utils",
+    "checksum": "sha256:deadbeef..."
   }
 ]
 ```
@@ -129,6 +130,7 @@ The available images are defined in `images.json` next to the script. Each entry
 * `image_file` – filename of the downloaded base image.
 * `image_url` – source URL for the image.
 * `packages` – optional comma-separated package list for `virt-customize`.
+* `checksum` – optional checksum (defaults to SHA-256 if the algorithm prefix is omitted). When provided, downloads are validated and the build stops on a mismatch.
 
 You can add or remove entries to support more images without changing the script. To point the script to a different file, set `IMAGES_CONFIG_FILE=/path/to/your.json` in the environment.
 
@@ -206,10 +208,7 @@ IMAGES_CONFIG_FILE="/path/to/images.json"
   Comma-separated list of `virt-sysprep` operations to run on the images.
 
 * `SKIP_IF_BASE_UNCHANGED`
-  If set to `true`, the script skips rebuilding a template when:
-
-  * a VM with the target VMID already exists, and
-  * the base image file has the same modification time as recorded in the last run.
+  If set to `true`, the script skips rebuilding a template when a VM with the target VMID already exists **and** both the base image timestamp and the captured configuration signature (RAM/CPU/disk sizes, network settings, timezone, sysprep operations, package list, checksum, and auth credentials) match the previous run.
 
 * `RESIZE_WAIT_ENABLED`
   If set to `true`, the script waits before and after disk resize (sleep 30s + 60s).

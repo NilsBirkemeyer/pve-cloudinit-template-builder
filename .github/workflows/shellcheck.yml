@@ -30,4 +30,4 @@ jobs:
 
       - name: Run shellcheck on script
         run: |
-          shellcheck pve-cloudinit-template-builder.sh
+          shellcheck -x pve-cloudinit-template-builder.sh

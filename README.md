@@ -289,5 +289,4 @@ Please:
 
 ## License
 
-This project is provided under the MIT License (or whatever license you actually choose for the repository).
-Please review the LICENSE file in the repository for details.
+This project is provided under the MIT License.

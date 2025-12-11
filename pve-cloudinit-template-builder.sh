@@ -6,8 +6,16 @@ set -euo pipefail
 # =============================================================================
 
 # Prevent sourcing to avoid redirecting your interactive shell into the log file.
-if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
-  echo "ERROR: Do not source this script. Run it via 'bash ${BASH_SOURCE[0]##*/}' instead." >&2
+prevent_sourcing() {
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    echo "ERROR: Do not source this script. Run it via 'bash ${BASH_SOURCE[0]##*/}' instead." >&2
+    return 1
+  fi
+
+  return 0
+}
+
+if ! prevent_sourcing; then
   return 1 2>/dev/null || exit 1
 fi
 
@@ -641,8 +649,7 @@ create_template_vm() {
   # Figure out the actual volume ID that qm importdisk created.
   local disk_vol_id
   if ! ${DRY_RUN}; then
-    disk_vol_id="$(qm config "${vm_id}" --format json | python3 - "${STORAGE_POOL}" <<'PY'
-import json, sys
+    disk_vol_id="$(qm config "${vm_id}" --format json | python3 -c 'import json, sys
 
 config = json.load(sys.stdin)
 target_storage = sys.argv[1]
@@ -656,8 +663,7 @@ if unused_disks:
     # Use the highest unused index to favor the most recent import
     selected = sorted(unused_disks, key=lambda item: item[0])[-1][1]
     print(selected)
-PY
-    )"
+' "${STORAGE_POOL}")"
 
     if [[ -z "${disk_vol_id}" ]]; then
       log_err "ERROR: Could not find imported disk for VM ${vm_id} on storage ${STORAGE_POOL}"

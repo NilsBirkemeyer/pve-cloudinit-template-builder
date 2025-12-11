@@ -354,7 +354,7 @@ PY
     exit 1
   fi
 
-  local line index=0
+    local index=0
   while IFS='|' read -r label vm_id vm_name image_file image_url packages; do
     IMAGE_LABELS+=("${label}")
     IMAGE_VM_IDS+=("${vm_id}")

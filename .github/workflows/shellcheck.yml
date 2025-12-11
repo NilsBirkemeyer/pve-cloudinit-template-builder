@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'pve-cloudinit-template-builder.sh'
+      - '.github/workflows/shellcheck.yml'
   pull_request:
     branches: [ "main" ]
+    paths:
+      - 'pve-cloudinit-template-builder.sh'
+      - '.github/workflows/shellcheck.yml'
   workflow_dispatch:
 
 jobs:
@@ -14,12 +20,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-    
+
       - name: Install shellcheck
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-    
+
       - name: Run shellcheck on script
         run: |
           shellcheck pve-cloudinit-template-builder.sh

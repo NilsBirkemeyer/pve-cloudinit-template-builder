@@ -1,373 +1,293 @@
-# PVE Cloud-Init Template Builder
+# Proxmox VE Cloud-Init Template Builder
 
-This repository provides a Bash script that automates the creation of cloud-init–enabled VM templates for Proxmox VE. It downloads official cloud images (Debian, Ubuntu, openSUSE), applies customization via `virt-sysprep` and `virt-customize`, and then converts the resulting VMs into reusable templates.
+This repository contains a Bash script that automates the creation of Proxmox VE VM templates based on upstream cloud-init images (Debian, Ubuntu, openSUSE).
+The script downloads and caches cloud images, customizes them, and converts the resulting VMs into reusable Proxmox templates.
 
-The script supports both interactive template selection (via `fzf`) and fully non-interactive batch mode, and includes basic caching and state tracking to avoid unnecessary rebuilds.
+The script is designed to be:
+
+* Repeatable (idempotent-ish with `SKIP_IF_BASE_UNCHANGED`)
+* Non-interactive friendly (for automation) but with an interactive `fzf` mode
+* Quiet on the terminal while writing full details to a log file
+* Configurable via a `.env` file instead of editing the script itself
 
 ---
 
 ## Features
 
-* Automated creation of Proxmox VE templates for:
+* Downloads official cloud-init images for:
 
-  * Debian 12 (Bookworm)
-  * Debian 13 (Trixie)
-  * Ubuntu 22.04 LTS (Jammy)
-  * Ubuntu 24.04 LTS (Noble)
+  * Debian 12 (bookworm)
+  * Debian 13 (trixie)
+  * Ubuntu 22.04 LTS (jammy)
+  * Ubuntu 24.04 LTS (noble)
   * openSUSE Leap 15.6
   * openSUSE Tumbleweed
-* Uses official cloud images (QCOW2/IMG) with timestamp-based update checks (`wget -N`)
-* Leverages `virt-sysprep` to clean up machine-specific data
-* Uses `virt-customize` to:
+* Caches base images in a configurable directory and only re-downloads if needed
+* Runs `virt-sysprep` and `virt-customize` to:
 
-  * Install guest tools (e.g., `qemu-guest-agent`)
-  * Configure the timezone
-* Proxmox VM configuration:
+  * Clean logs, machine IDs, SSH host keys, package caches
+  * Install `qemu-guest-agent` and cloud-init/cloud-utils (depending on OS)
+  * Set timezone
+* Creates Proxmox VMs with:
 
-  * VirtIO disk and network
-  * Cloud-Init drive
-  * QEMU Guest Agent enabled
-  * Ballooning configured
-* SSH-key–only admin user by default, with optional password
-* State tracking to skip template rebuilds if the base image has not changed
-* Interactive multi-select of distributions via `fzf`
-* Non-interactive `--all` mode
-* Optional sleep-based workaround around Proxmox disk import/resize timing quirks
+  * VirtIO disk, cloud-init drive, QEMU guest agent enabled
+  * `local-admin` cloud-init user
+  * SSH key injection
+  * Optional admin password
+* Converts VMs into templates after resizing disks to a configurable size
+* Optional sleeps around disk resize as a workaround for Proxmox disk import/resize timing issues
+* Idempotence helper: skip rebuilding templates if the base image has not changed
 
 ---
 
-## Warning
+## How it works (high-level)
 
-This script will destroy and recreate VMs using the configured VMIDs.
+1. Load configuration from `.env` (paths, storage, resources, network, etc.).
+2. For every selected distribution:
 
-For each template, it runs:
-
-* `qm destroy <VMID> --purge`
-
-before creating a new VM and converting it into a template. Make sure the VMIDs you configure are not used by anything important in your environment.
+   * Download or update the corresponding cloud image into `DOWNLOAD_DIR`.
+   * Make a working copy of the image.
+   * Run `virt-sysprep` and `virt-customize`.
+   * Create a VM with the configured VMID and resources.
+   * Import the disk into the selected `STORAGE_POOL`.
+   * Attach cloud-init drive and configure Proxmox VM options.
+   * Resize the disk to `DISK_SIZE` (with optional sleeps before/after).
+   * Convert the VM into a template.
+3. Store template state (base image mtime) so later runs can skip unchanged images if desired.
+4. Log all actions and command output to a timestamped log file.
 
 ---
 
 ## Requirements
 
-On the Proxmox VE node where you run the script:
+### Proxmox VE
 
-* Proxmox VE with:
+* Proxmox VE node with:
 
-  * `qm` binary available (standard on Proxmox)
-  * A configured storage pool (e.g., `local-zfs`, `local-lvm`)
-* Installed tools:
-
-  * `wget`
-  * `virt-sysprep`
-  * `virt-customize`
-  * `stat`
+  * `qm`
   * `pvesm`
-  * `fzf` (only required for interactive mode)
-* Network access to the official cloud image mirrors (Debian, Ubuntu, openSUSE)
-* Sufficient disk space in:
+  * A configured storage pool (e.g. `local-lvm`, `local-zfs`, …)
 
-  * The template download directory
-  * The selected Proxmox storage pool
+### Packages on the Proxmox node
 
-The script assumes you are running it as `root` on a trusted Proxmox host.
+The script expects at least:
 
-Tested on:
+* `wget`
+* `virt-sysprep` (usually from `libguestfs-tools` or equivalent)
+* `virt-customize`
+* `stat`
+* `fzf` (only needed for interactive mode)
+* `bash`
 
-* Proxmox VE 9.1.2 (single node; homogeneous CPU environment)
-
----
-
-## Repository layout
-
-* `pve-cloudinit-template-builder.sh`
-
-  * Main script that creates and updates the templates.
-* `.github/workflows/shellcheck.yml` (optional)
-
-  * GitHub Actions workflow to run `shellcheck` against the script.
+Cloud-init packages (`qemu-guest-agent`, `cloud-init`, `cloud-guest-utils`) are installed inside the guest images by `virt-customize`.
 
 ---
 
-## Configuration
+## Installation
 
-Most configuration is done by editing the header section of `pve-cloudinit-template-builder.sh`.
+On your Proxmox node:
 
-### Base paths and storage
+1. Clone the repository:
 
-Set these to match your environment:
+   git clone [https://github.com/](https://github.com/)<your-user>/proxmox-template-generator.git
+   cd proxmox-template-generator
 
-* `DOWNLOAD_DIR`
+2. Make the script executable:
 
-  * Directory on the Proxmox node where base cloud images, logs, and state are stored.
-  * Example: `/local-zfs/templates`
-* `STORAGE_POOL`
+   chmod +x pve-cloudinit-template-builder.sh
 
-  * Name of the Proxmox storage where VM disks and the cloud-init drive will be created.
-  * Example: `local-zfs` or `local-lvm`
-
-Both variables must be set to non-placeholder values. The script will abort if they are left as the default placeholders.
-
-### VM IDs
-
-Each template uses a fixed VMID by default:
-
-* `DEBIAN_12_VMID=9000`
-* `DEBIAN_13_VMID=9001`
-* `UBUNTU_2204_VMID=9002`
-* `UBUNTU_2404_VMID=9003`
-* `OPENSUSE_LEAP_156_VMID=9004`
-* `OPENSUSE_TUMBLEWEED_VMID=9005`
-
-You can adjust these IDs in the script header to match your own VMID planning. The script will destroy any existing VM with those IDs before recreating templates.
-
-### Resources (RAM, CPU, disk size)
-
-Adjust as appropriate for your typical workloads:
-
-* `VM_RAM`
-
-  * RAM in MB for each template (e.g., `2048`, `4096`, `8192`)
-* `VM_CORES`
-
-  * Number of CPU cores (e.g., `2`, `4`)
-* `DISK_SIZE`
-
-  * Size of the main disk after resize (e.g., `"8G"`, `"16G"`, `"32G"`)
-
-### Network / Cloud-Init
-
-* `NET_BRIDGE`
-
-  * Proxmox bridge to attach (e.g., `vmbr0`)
-* `SEARCHDOMAIN`
-
-  * Optional DNS search domain; can be empty (`""`)
-* `NAMESERVER`
-
-  * Optional DNS server IP; can be empty (`""`)
-* `IPCONFIG`
-
-  * Cloud-Init IP configuration, either DHCP or static.
-  * Examples:
-
-    * `IPCONFIG="dhcp"`
-    * `IPCONFIG="192.168.10.50/24,gw=192.168.10.1"`
-
-If `SEARCHDOMAIN` or `NAMESERVER` are left as placeholders, the script will abort. If you do not want to set them via Cloud-Init, set them to an empty string.
-
-### Authentication
-
-* `AUTHORIZED_KEYS`
-
-  * Path to a file containing the SSH public keys for the `local-admin` user.
-  * This file must exist; otherwise, the script will abort.
-* `ADMIN_PASSWORD_FILE`
-
-  * Optional path to a file containing the admin password.
-* `ADMIN_PASSWORD`
-
-  * Optional environment variable to provide the admin password.
-  * If not set, and `ADMIN_PASSWORD_FILE` does not exist, `local-admin` will be created without a password (SSH-key only).
-
-On a trusted host, using `ADMIN_PASSWORD` or `ADMIN_PASSWORD_FILE` is acceptable, but keep in mind that:
-
-* The password is passed to `qm set --cipassword`, which means it may briefly appear in the process list.
-
-If you want SSH-key–only logins, simply do not set `ADMIN_PASSWORD` and do not create `ADMIN_PASSWORD_FILE`.
-
-### Timezone
-
-* `TIMEZONE`
-
-  * Timezone string used during `virt-customize`.
-  * Example: `Europe/Berlin`
+3. Create an `.env` file (see next section) based on `.env.example`.
 
 ---
 
-## Behavior toggles (environment variables)
+## Configuration via `.env`
 
-### SKIP_IF_BASE_UNCHANGED
+All configuration is expected to be provided via a `.env` file located next to the script.
 
-* `SKIP_IF_BASE_UNCHANGED=true`
-
-  * If set, the script compares the modification time of the downloaded base image with a stored timestamp in the state directory.
-  * If the image timestamp is unchanged and the VMID already exists, the template rebuild is skipped.
-* Default: `false`
-
+The `.env` file is a simple shell-compatible file that defines environment variables.
 Example:
 
-SKIP_IF_BASE_UNCHANGED=true ./pve-cloudinit-template-builder.sh --all
+DOWNLOAD_DIR="/tmp/templates"
+STORAGE_POOL="local-lvm"
 
-### RESIZE_WAIT_ENABLED
+VM_RAM="4096"
+VM_CORES="2"
+DISK_SIZE="8G"
 
-There is a timing issue, at least for me, around disk import and resize operations on some Proxmox setups. To work around this, the script:
+NET_BRIDGE="vmbr0"
+SEARCHDOMAIN="example.com"
+NAMESERVER="10.0.0.1"
+IPCONFIG="dhcp"
 
-* Waits 30 seconds before `qm resize`
-* Waits 60 seconds after `qm resize`
+AUTHORIZED_KEYS="/root/templates/authorized_keys"
+ADMIN_PASSWORD_FILE="/root/templates/admin_password"
 
-This behavior is controlled by:
+## Optional override:
 
-* `RESIZE_WAIT_ENABLED=true` (default)
+### ADMIN_PASSWORD="supersecret"
 
-  * Enables the sleep calls.
-* `RESIZE_WAIT_ENABLED=false`
+TIMEZONE="Europe/Berlin"
 
-  * Disables the sleep calls.
+SYSPREP_OPS="bash-history,logfiles,ssh-hostkeys,machine-id,package-manager-cache"
 
-You can also override this via a CLI flag (`--no-resize-wait`), see below.
+SKIP_IF_BASE_UNCHANGED="false"
+RESIZE_WAIT_ENABLED="true"
+
+### Important variables
+
+* `DOWNLOAD_DIR`
+  Directory where base images, logs and state are stored.
+
+* `STORAGE_POOL`
+  Proxmox storage pool name (e.g. `local-lvm`, `local-zfs`). Must exist on the node.
+
+* `VM_RAM`, `VM_CORES`, `DISK_SIZE`
+  Template defaults for memory (MB), vCPUs and disk size.
+
+* `NET_BRIDGE`
+  Proxmox bridge interface to use (e.g. `vmbr0`, `vmbr1`, `vmbr04`).
+
+* `SEARCHDOMAIN`, `NAMESERVER`
+  Optional cloud-init DNS settings. Can be empty strings if you do not want the script to set them.
+
+* `IPCONFIG`
+  IP configuration for `ipconfig0` (e.g. `dhcp` or `192.168.10.50/24,gw=192.168.10.1`).
+
+* `AUTHORIZED_KEYS`
+  Path to a file containing SSH public keys to inject for the `local-admin` user.
+
+* `ADMIN_PASSWORD_FILE` / `ADMIN_PASSWORD`
+
+  * If `ADMIN_PASSWORD` is set in the environment or `.env`, it is used as the password for `local-admin`.
+  * Otherwise, if `ADMIN_PASSWORD_FILE` points to a readable file, its content is used.
+  * If both are missing/empty, the `local-admin` user is configured as SSH-key-only (no password login).
+
+* `TIMEZONE`
+  Timezone to set inside the templates, e.g. `Europe/Berlin`.
+
+* `SYSPREP_OPS`
+  Comma-separated list of `virt-sysprep` operations to run on the images.
+
+* `SKIP_IF_BASE_UNCHANGED`
+  If set to `true`, the script skips rebuilding a template when:
+
+  * a VM with the target VMID already exists, and
+  * the base image file has the same modification time as recorded in the last run.
+
+* `RESIZE_WAIT_ENABLED`
+  If set to `true`, the script waits before and after disk resize (sleep 30s + 60s).
+  This is a workaround for Proxmox disk import/resize timing issues.
+  You can disable it either by setting `RESIZE_WAIT_ENABLED="false"` in `.env` or by using `--no-resize-wait`.
 
 ---
 
-## Command-line usage
+## Usage
 
-Clone the repository to your Proxmox node, for example:
+From the repository directory:
 
-git clone [https://github.com/](https://github.com/)<your-username>/pve-cloudinit-template-builder.git
-cd pve-cloudinit-template-builder
-chmod +x pve-cloudinit-template-builder.sh
-
-Basic usage:
+### Interactive mode (default, using fzf)
 
 ./pve-cloudinit-template-builder.sh
 
-This will:
+You will be presented with a list of base images (Debian, Ubuntu, openSUSE).
+Use SPACE to select multiple entries and ENTER to start template creation.
+Selecting `ALL` will build all supported images.
 
-* Run in interactive mode.
-* Use `fzf` to let you select which templates to build.
+### Non-interactive mode
 
-### Options
+Build all templates without interaction:
 
-* `--all` / `--non-interactive`
+./pve-cloudinit-template-builder.sh --non-interactive
 
-  * Build all templates without an interactive `fzf` prompt.
-  * Equivalent to selecting `ALL` in the interactive menu.
-* `--no-resize-wait`
+(You can also use `--all`, which is treated the same.)
 
-  * Disables the wait before/after disk resize, overriding `RESIZE_WAIT_ENABLED`.
-* `--help` / `-h`
+### Disabling resize waits
 
-  * Print usage information and exit.
+If you know your environment does not suffer from the Proxmox disk import/resize timing issue, you can skip the sleeps:
 
-Examples:
+./pve-cloudinit-template-builder.sh --no-resize-wait
 
-1. Interactive selection:
+Alternatively, set in `.env`:
 
-   ./pve-cloudinit-template-builder.sh
+RESIZE_WAIT_ENABLED="false"
 
-2. Build all templates non-interactively:
+### Help
 
-   ./pve-cloudinit-template-builder.sh --all
-
-3. Build all templates, skip rebuilds if base images are unchanged:
-
-   SKIP_IF_BASE_UNCHANGED=true ./pve-cloudinit-template-builder.sh --all
-
-4. Build all templates without any disk resize waits:
-
-   RESIZE_WAIT_ENABLED=false ./pve-cloudinit-template-builder.sh --all
-
-   or:
-
-   ./pve-cloudinit-template-builder.sh --all --no-resize-wait
-
-5. Provide an admin password via environment variable:
-
-   ADMIN_PASSWORD='your-secure-password' ./pve-cloudinit-template-builder.sh --all
+./pve-cloudinit-template-builder.sh --help
 
 ---
 
-## Templates created
+## Logging
 
-For each selected distribution, the script will:
+The script writes:
 
-1. Download or update the cloud image into `${DOWNLOAD_DIR}`.
-2. Create a working copy and run `virt-sysprep` and `virt-customize`.
-3. Create a Proxmox VM with the configured VMID.
-4. Import the disk to `STORAGE_POOL`.
-5. Attach the disk as `virtio0` with writeback cache and discard enabled.
-6. Attach a Cloud-Init drive (`ide2`).
-7. Configure VM options:
+* Human-readable progress messages to the terminal (high-level status).
+* Full command output and details (including `wget`, `virt-sysprep`, `virt-customize`, `qm`, `pvesm` messages) into a log file.
 
-   * `--agent enabled=1`
-   * `--boot c --bootdisk virtio0`
-   * `--hotplug disk,network,usb`
-   * `--serial0 socket`
-   * `--vga serial0`
-   * `--cpu cputype=host`
-   * `--ostype l26`
-   * `--balloon` to half of `VM_RAM`
-   * `--ciuser local-admin`
-   * `--sshkeys` set from `AUTHORIZED_KEYS`
-   * `--cipassword` if configured
-   * Optional `--searchdomain` and `--nameserver` if configured
-   * `--ipconfig0` set from `IPCONFIG`
-8. Resize the main disk to `DISK_SIZE`.
-9. Convert the VM to a template via `qm template`.
+Logs are stored in:
 
-The resulting template names are:
+* `${DOWNLOAD_DIR}/logs/template-creation-YYYYMMDD-HHMMSS.log`
 
-* `cloudinit-template-debian-12`
-* `cloudinit-template-debian-13`
-* `cloudinit-template-ubuntu-22.04`
-* `cloudinit-template-ubuntu-24.04`
-* `cloudinit-template-opensuse-leap-15.6`
-* `cloudinit-template-opensuse-tumbleweed`
+If something goes wrong, you will see a short error message in the terminal with the path to the log file. The log contains all the underlying command output for troubleshooting.
+
+State files for `SKIP_IF_BASE_UNCHANGED` are stored in:
+
+* `${DOWNLOAD_DIR}/state/`
 
 ---
 
-## Logging and state
+## VM IDs
 
-* Logs:
+The script uses fixed VMIDs for each template (one VMID per distribution).
+You should ensure these VMIDs are free on your Proxmox node before running the script for the first time.
 
-  * Written to `${DOWNLOAD_DIR}/logs/template-creation-YYYYMMDD-HHMMSS.log`
-  * All script output goes both to the console and to the log file.
-* State:
-
-  * A simple state file is maintained in `${DOWNLOAD_DIR}/state/vm-<VMID>.state`.
-  * It stores the `stat -c %Y` modification time of the underlying base image.
-  * Used in combination with `SKIP_IF_BASE_UNCHANGED`.
-
-On error, the script prints a short error message and the log file path.
+If you want to change VMIDs, adjust them in the script (or extend the script to read them from `.env` as well).
 
 ---
 
-## Security considerations
+## CI and Shellcheck
 
-* The script is intended to run on a trusted Proxmox VE host.
-* SSH keys are required for the `local-admin` user via `AUTHORIZED_KEYS`.
-* Admin password:
+This repository includes a GitHub Actions workflow that:
 
-  * Using `ADMIN_PASSWORD` or `ADMIN_PASSWORD_FILE` will configure a cloud-init password for `local-admin`.
-  * As with any CLI-based password handling, the password may appear briefly in the process list during `qm set --cipassword`.
-* If you want to avoid password exposure:
+* Runs `shellcheck` against `pve-cloudinit-template-builder.sh`
+* Is triggered on:
 
-  * Do not set `ADMIN_PASSWORD`.
-  * Do not create `ADMIN_PASSWORD_FILE`.
-  * Use SSH keys only.
+  * Changes to the script,
+  * Changes to `.env.example`,
+  * Changes to the workflow file itself.
 
----
-
-## Troubleshooting
-
-* `ERROR: STORAGE_POOL '<YOUR_STORAGE_POOL>' does not exist on this node.`
-
-  * Ensure the storage name matches `Datacenter -> Storage` in the Proxmox web UI.
-* `ERROR: authorized_keys file not found`
-
-  * Check that the path in `AUTHORIZED_KEYS` is correct and the file contains at least one valid SSH public key.
-* `ERROR: Base image <file> not found after download.`
-
-  * Check file permissions and free space in `DOWNLOAD_DIR`.
-  * Ensure the host can reach the respective cloud image URLs.
-* `ERROR: Could not find imported disk for VM <ID> on storage <STORAGE_POOL>`
-
-  * Verify that `pvesm list <STORAGE_POOL>` returns the expected `vm-<ID>-disk-*` volumes.
-  * Check storage type and permissions.
+This helps keep the script shellcheck-clean and maintainable over time.
 
 ---
 
-## Notes
+## Known limitations / notes
 
-* The script sets `cputype=host`. This is usually fine on a single node or homogeneous cluster. On heterogeneous clusters or when heavy live-migration is required, you may want to adjust this in the script.
-* The disk import/resize waits are present as a workaround for timing issues observed on some Proxmox setups. They can be disabled if your environment does not need them.
+* The script assumes it is running on a trusted Proxmox node (no hardening of secrets, no untrusted input handling).
+* The resize sleeps are a pragmatic workaround for Proxmox timing/locking behavior on some setups. If you disable them and see sporadic resize errors, re-enable the waits.
+* The script focuses on KVM/cloud-init images and does not handle ISOs or non-cloud-init templates.
+* The openSUSE image URLs may change over time; if downloads fail with `404`, check the upstream images and adjust the URLs in the script accordingly.
+
+---
+
+## Contributing
+
+Contributions are welcome. Typical ways to contribute:
+
+* Fix or update image URLs when upstream changes.
+* Add support for additional distributions or images.
+* Improve error handling, logging, or configuration flexibility.
+* Extend `.env` handling (e.g. make VMIDs configurable).
+
+Please:
+
+1. Fork the repository.
+2. Create a feature branch.
+3. Run `shellcheck` locally or rely on the provided GitHub Actions workflow.
+4. Open a pull request with a clear description of the change.
+
+---
+
+## License
+
+This project is provided under the MIT License (or whatever license you actually choose for the repository).
+Please review the LICENSE file in the repository for details.

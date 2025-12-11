@@ -15,9 +15,7 @@ prevent_sourcing() {
   return 0
 }
 
-if ! prevent_sourcing; then
-  return 1 2>/dev/null || exit 1
-fi
+prevent_sourcing || return 1
 
 # =============================================================================
 # Load configuration from .env

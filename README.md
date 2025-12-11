@@ -264,8 +264,8 @@ The script always writes full details to the log file. Console output can be tun
 
 * Default (no flags) – summary lines per image/template.
 * `-v` or `--verbose` – lightly verbose (level 2) progress on the console.
-* `-vv` – full verbosity (level 3) progress on the console.
-* `-vvv` or `--debug` – alias for `-vv` (all available debug-level messages).
+* `-vv` – medium verbosity (level 3) progress on the console.
+* `-vvv` or `--debug` – maximum verbosity (all available debug-level messages).
 
 ---
 

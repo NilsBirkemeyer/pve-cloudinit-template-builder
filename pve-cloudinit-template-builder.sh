@@ -6,10 +6,16 @@ set -euo pipefail
 # =============================================================================
 
 # Prevent sourcing to avoid redirecting your interactive shell into the log file.
-if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
-  echo "ERROR: Do not source this script. Run it via 'bash ${BASH_SOURCE[0]##*/}' instead." >&2
-  return 1
-fi
+prevent_sourcing() {
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    echo "ERROR: Do not source this script. Run it via 'bash ${BASH_SOURCE[0]##*/}' instead." >&2
+    return 1
+  fi
+
+  return 0
+}
+
+prevent_sourcing || return 1
 
 # =============================================================================
 # Load configuration from .env
